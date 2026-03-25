@@ -884,6 +884,88 @@ def handle_kill_process(params):
         return {"success": False, "error": str(e)}
 
 
+def handle_screenshot(params):
+    """Take a screenshot and return as base64 JPEG."""
+    quality = int(params.get("quality", 60))
+
+    try:
+        import io
+
+        # Try mss first (fast, no display server needed)
+        try:
+            import mss
+            with mss.mss() as sct:
+                monitor = sct.monitors[0]  # full virtual screen
+                img_bytes = sct.grab(monitor)
+                # Convert to JPEG via PIL
+                from PIL import Image
+                img = Image.frombytes("RGB", img_bytes.size, img_bytes.bgra, "raw", "BGRX")
+                buf = io.BytesIO()
+                img.save(buf, format="JPEG", quality=quality)
+                b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+                return {
+                    "success": True,
+                    "image": b64,
+                    "width": img.width,
+                    "height": img.height,
+                    "format": "jpeg",
+                }
+        except ImportError:
+            pass
+
+        # Try PIL ImageGrab
+        try:
+            from PIL import ImageGrab
+            img = ImageGrab.grab(all_screens=True)
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=quality)
+            b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+            return {
+                "success": True,
+                "image": b64,
+                "width": img.width,
+                "height": img.height,
+                "format": "jpeg",
+            }
+        except ImportError:
+            pass
+
+        # Fallback: use Windows API via PowerShell
+        temp_path = os.path.join(os.environ.get("TEMP", "."), "rfm_screenshot.jpg")
+        ps_cmd = f'''
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+$bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+$bmp = New-Object System.Drawing.Bitmap($bounds.Width, $bounds.Height)
+$g = [System.Drawing.Graphics]::FromImage($bmp)
+$g.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+$g.Dispose()
+$bmp.Save("{temp_path}", [System.Drawing.Imaging.ImageFormat]::Jpeg)
+$bmp.Dispose()
+'''
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", ps_cmd],
+            capture_output=True, text=True, timeout=15
+        )
+
+        if os.path.isfile(temp_path):
+            with open(temp_path, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode("ascii")
+            os.unlink(temp_path)
+            return {
+                "success": True,
+                "image": b64,
+                "width": 0,
+                "height": 0,
+                "format": "jpeg",
+            }
+
+        return {"success": False, "error": "No screenshot library available. Install Pillow: pip install Pillow"}
+
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 def handle_self_update(params):
     """Self-update: download new exe/script from URL, replace, and restart."""
     update_url = params.get("url", "")
@@ -993,6 +1075,7 @@ HANDLERS = {
     "processes": handle_processes,
     "kill_process": handle_kill_process,
     "self_update": handle_self_update,
+    "screenshot": handle_screenshot,
 }
 
 def process_command(cmd):
