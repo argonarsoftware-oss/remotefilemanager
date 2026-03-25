@@ -33,7 +33,7 @@ import requests
 # ============================================================
 SERVER_URL = "https://argonar.co/filemanager/api.php"
 AGENT_TOKEN = "rfm_agent_argonar_2026"
-POLL_INTERVAL = 1  # seconds between polls
+POLL_INTERVAL = 0.3  # seconds between polls
 
 # ============================================================
 # Admin Privilege Check (Windows)
