@@ -989,7 +989,7 @@ def main():
     # Main poll loop
     while True:
         try:
-            result = server_post("agent.poll")
+            result = server_post("agent.poll", {"hostname": socket.gethostname()})
 
             if result and result.get("success"):
                 cmd = result.get("command")
