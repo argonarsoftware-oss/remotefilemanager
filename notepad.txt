@@ -1,0 +1,133 @@
+Remote File Manager - How This Agent Was Made (Claude Code Prompts)
+====================================================================
+
+This project was built entirely through Claude Code prompts.
+Below is the sequence of prompts used to create and evolve this codebase.
+
+--------------------------------------------------------------------
+PROMPT 1: Initial Agent Creation
+--------------------------------------------------------------------
+"Create a remote file manager desktop agent in Python that:
+- Runs with admin privileges on Windows
+- Polls a server API (argonar.co/filemanager/api.php) for commands
+- Executes file operations locally (list, download, upload, delete, mkdir, rename)
+- Sends results back to the server
+- Hides its console window and auto-installs to Task Scheduler
+- Authenticates with a hardcoded agent token
+- Supports browsing drives and directories"
+
+--------------------------------------------------------------------
+PROMPT 2: Additional Commands
+--------------------------------------------------------------------
+"Add more commands to the agent:
+- shell: execute shell commands with persistent working directory
+- read_file / write_file: read and edit text files remotely
+- search: search files by name pattern
+- move / copy: move or copy files and directories
+- zip / unzip: create and extract zip archives
+- sysinfo: get system information (CPU, RAM, disks, uptime)
+- properties: get file/directory metadata"
+
+--------------------------------------------------------------------
+PROMPT 3: Push to GitHub
+--------------------------------------------------------------------
+"now push this codebase to git"
+- Initialized git repo
+- Created .gitignore (excluding __pycache__, build, dist)
+- Created GitHub repo under argonarsoftware-oss/remotefilemanager
+- Pushed initial commit
+
+--------------------------------------------------------------------
+PROMPT 4: Build the Server Side
+--------------------------------------------------------------------
+"now remake it to align with the agent"
+- Created filemanager/api.php in the Argonar-Construction repo
+  - All agent endpoints: agent.register, agent.poll, agent.result, agent.upload_file, agent.get_upload
+  - All web endpoints: web.command, web.result, web.upload, web.download_file, web.agent_status
+  - MySQL tables: rfm_agents, rfm_commands
+  - File transfer via uploads/ directory
+- Created filemanager/index.php
+  - Password login (argonar2026)
+  - Full SPA file browser with dark theme
+  - Breadcrumb navigation, drive selector
+  - Right-click context menu (rename, delete, copy, cut, paste, zip, unzip, download, properties)
+  - Upload, new folder, search
+  - Built-in terminal (shell commands)
+  - File editor (read/write)
+  - System info panel
+  - Agent online/offline status indicator
+
+--------------------------------------------------------------------
+PROMPT 5: Auto-Deploy Setup
+--------------------------------------------------------------------
+"imitate the auto deploy github webhook of this codebase for remotefilemanager using gh"
+- Created webhook-deploy.php for GitHub webhook auto-deploy
+- Set up GitHub webhook via gh CLI
+- Later removed from remotefilemanager (agent doesn't need deploy)
+- Server files deploy through Argonar-Construction webhook instead
+
+--------------------------------------------------------------------
+PROMPT 6: Speed Optimization
+--------------------------------------------------------------------
+"best decision?" (for making filemanager faster)
+- Reduced agent poll interval: 1s -> 0.3s (app.py)
+- Reduced web UI poll interval: 500ms -> 200ms (index.php)
+- Made cleanup run 1-in-20 polls instead of every poll (api.php)
+- Total latency dropped from ~1.5-2s to ~350-500ms
+
+--------------------------------------------------------------------
+PROMPT 7: Process Manager
+--------------------------------------------------------------------
+"I want that it has process list?"
+- Added handle_processes() to agent
+  - Lists running processes with PID, name, CPU%, memory, status, user, start time
+  - Sortable by memory, cpu, name, pid
+  - Falls back to tasklist command if psutil not available
+- Added handle_kill_process() to agent
+  - Kill any process by PID
+- Added Processes modal to web UI
+  - Sort dropdown, refresh button, kill button per process
+
+--------------------------------------------------------------------
+PROMPT 8: Multi-Agent Support
+--------------------------------------------------------------------
+"can we make this filemanager allow multiple agents"
+- Added agent_id column to rfm_commands table (api.php)
+- Agent sends hostname on every poll (app.py)
+- Commands are routed to specific agents by hostname
+- Added web.agents endpoint to list all connected agents
+- Added agent selector dropdown in web UI header
+- Switching agents resets file browser and terminal
+- Backward compatible with old agents (resolves hostname from db)
+
+--------------------------------------------------------------------
+ARCHITECTURE SUMMARY
+--------------------------------------------------------------------
+The system has 3 parts:
+
+1. Desktop Agent (this repo - app.py)
+   - Python script that runs on target Windows machines
+   - Polls server every 0.3s for commands
+   - Executes locally with admin privileges
+   - Sends results back to server
+
+2. PHP API (Argonar-Construction/filemanager/api.php)
+   - Bridges web UI and agents
+   - MySQL command queue (rfm_commands)
+   - Agent registry (rfm_agents)
+   - File transfer handling
+
+3. Web UI (Argonar-Construction/filemanager/index.php)
+   - Single-page app with jQuery
+   - Dark theme, responsive
+   - All file operations + terminal + process manager
+
+Flow: Web UI -> Server Queue -> Agent Polls -> Executes -> Posts Result -> Web UI Polls -> Displays
+
+--------------------------------------------------------------------
+TECH STACK
+--------------------------------------------------------------------
+Agent: Python 3, requests, psutil (optional), PyInstaller for .exe
+Server: PHP (vanilla, no framework), MySQL/PDO
+Web UI: HTML/CSS/JS, jQuery, inline styles
+Deploy: GitHub webhook auto-deploy to argonar.co
