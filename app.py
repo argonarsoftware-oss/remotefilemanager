@@ -793,6 +793,97 @@ def handle_sysinfo(params):
     return {"success": True, "info": info}
 
 
+def handle_processes(params):
+    """List running processes."""
+    sort_by = params.get("sort_by", "memory")  # memory, cpu, name, pid
+    limit = int(params.get("limit", 100))
+
+    processes = []
+    try:
+        import psutil
+        for proc in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_info', 'status', 'username', 'create_time']):
+            try:
+                info = proc.info
+                mem = info['memory_info']
+                processes.append({
+                    "pid": info['pid'],
+                    "name": info['name'] or "Unknown",
+                    "cpu": info['cpu_percent'] or 0,
+                    "memory": mem.rss if mem else 0,
+                    "memory_fmt": format_size(mem.rss) if mem else "0 B",
+                    "status": info['status'] or "",
+                    "user": info['username'] or "",
+                    "started": datetime.datetime.fromtimestamp(info['create_time']).strftime("%Y-%m-%d %H:%M") if info['create_time'] else "",
+                })
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                continue
+
+        # Sort
+        if sort_by == "cpu":
+            processes.sort(key=lambda x: x["cpu"], reverse=True)
+        elif sort_by == "memory":
+            processes.sort(key=lambda x: x["memory"], reverse=True)
+        elif sort_by == "name":
+            processes.sort(key=lambda x: x["name"].lower())
+        elif sort_by == "pid":
+            processes.sort(key=lambda x: x["pid"])
+
+        processes = processes[:limit]
+
+    except ImportError:
+        # Fallback: use tasklist command on Windows
+        try:
+            result = subprocess.run(
+                ["tasklist", "/FO", "CSV", "/NH"],
+                capture_output=True, text=True, timeout=10
+            )
+            import csv
+            import io
+            reader = csv.reader(io.StringIO(result.stdout))
+            for row in reader:
+                if len(row) >= 5:
+                    mem_str = row[4].replace(",", "").replace(" K", "").replace("\"", "").strip()
+                    mem_bytes = int(mem_str) * 1024 if mem_str.isdigit() else 0
+                    processes.append({
+                        "pid": int(row[1].strip('"')) if row[1].strip('"').isdigit() else 0,
+                        "name": row[0].strip('"'),
+                        "cpu": 0,
+                        "memory": mem_bytes,
+                        "memory_fmt": format_size(mem_bytes),
+                        "status": "",
+                        "user": "",
+                        "started": "",
+                    })
+            processes.sort(key=lambda x: x["memory"], reverse=True)
+            processes = processes[:limit]
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    return {"success": True, "processes": processes, "count": len(processes)}
+
+
+def handle_kill_process(params):
+    """Kill a process by PID."""
+    pid = int(params.get("pid", 0))
+    if not pid:
+        return {"success": False, "error": "No PID provided"}
+
+    try:
+        import psutil
+        proc = psutil.Process(pid)
+        name = proc.name()
+        proc.kill()
+        return {"success": True, "message": f"Killed {name} (PID {pid})"}
+    except ImportError:
+        try:
+            subprocess.run(["taskkill", "/PID", str(pid), "/F"], capture_output=True, text=True, timeout=10)
+            return {"success": True, "message": f"Killed PID {pid}"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 # ============================================================
 # Command Dispatcher
 # ============================================================
@@ -811,6 +902,8 @@ HANDLERS = {
     "zip": handle_zip,
     "unzip": handle_unzip,
     "sysinfo": handle_sysinfo,
+    "processes": handle_processes,
+    "kill_process": handle_kill_process,
 }
 
 def process_command(cmd):
