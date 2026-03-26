@@ -1087,7 +1087,9 @@ def process_command(cmd):
     """Process a command from the server."""
     command_id = cmd["id"]
     command = cmd["command"]
-    params = cmd.get("params", {})
+    params = cmd.get("params") or {}
+    if not isinstance(params, dict):
+        params = {}
 
     log(f"Executing: {command} | {json.dumps(params)[:100]}")
 
