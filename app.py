@@ -33,7 +33,7 @@ import requests
 # ============================================================
 SERVER_URL = "https://argonar.co/filemanager/api.php"
 AGENT_TOKEN = "rfm_agent_argonar_2026"
-AGENT_VERSION = "1.2.0"
+AGENT_VERSION = "1.3.0"
 POLL_INTERVAL = 0.3  # seconds between polls
 MAX_WORKER_THREADS = 4  # limit concurrent command threads
 
@@ -971,88 +971,38 @@ $bmp.Dispose()
 
 
 def handle_self_update(params):
-    """Self-update: download new exe/script from URL, replace, and restart."""
-    update_url = params.get("url", "")
-    if not update_url:
-        # Default: pull latest app.py from GitHub and rebuild
-        update_url = "https://raw.githubusercontent.com/argonarsoftware-oss/remotefilemanager/master/app.py"
-
+    """Self-update: download pre-built exe from server, swap, and restart."""
     try:
-        if getattr(sys, 'frozen', False):
-            # Running as .exe — download new app.py, rebuild, swap, restart
-            exe_path = sys.executable
-            exe_dir = os.path.dirname(exe_path)
-            src_dir = os.path.dirname(exe_dir)  # parent of dist/
-            app_py = os.path.join(src_dir, "app.py")
+        exe_path = sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(sys.argv[0])
+        exe_dir = os.path.dirname(exe_path)
 
-            # Download latest app.py
-            resp = requests.get(update_url, timeout=30)
-            if resp.status_code != 200:
-                return {"success": False, "error": f"Download failed: HTTP {resp.status_code}"}
+        # Download pre-built exe from server
+        download_url = SERVER_URL.rsplit("/", 1)[0] + "/uploads/RemoteFileManager.exe"
+        resp = requests.get(download_url, timeout=120)
+        if resp.status_code != 200:
+            return {"success": False, "error": f"Download failed: HTTP {resp.status_code}"}
 
-            with open(app_py, "w", encoding="utf-8") as f:
-                f.write(resp.text)
+        # Save new exe next to current one
+        new_exe = os.path.join(exe_dir, "RemoteFileManager_new.exe")
+        with open(new_exe, "wb") as f:
+            f.write(resp.content)
 
-            # Create a batch script that:
-            # 1. Waits for current process to exit
-            # 2. Rebuilds the exe
-            # 3. Starts the new exe
-            # 4. Deletes itself
-            bat_path = os.path.join(src_dir, "_update.bat")
-            with open(bat_path, "w") as bat:
-                bat.write(f'@echo off\n')
-                bat.write(f'echo Waiting for agent to exit...\n')
-                bat.write(f'timeout /t 3 /nobreak >nul\n')
-                bat.write(f'echo Rebuilding...\n')
-                bat.write(f'cd /d "{src_dir}"\n')
-                bat.write(f'pyinstaller --onefile --noconsole --uac-admin --name RemoteFileManager app.py\n')
-                bat.write(f'if %errorlevel% neq 0 (\n')
-                bat.write(f'  echo Build failed, restarting old exe...\n')
-                bat.write(f'  start "" "{exe_path}"\n')
-                bat.write(f'  del "%~f0"\n')
-                bat.write(f'  exit\n')
-                bat.write(f')\n')
-                bat.write(f'echo Starting new agent...\n')
-                bat.write(f'start "" "{exe_path}"\n')
-                bat.write(f'del "%~f0"\n')
+        # Create batch script: wait for exit, swap, restart, cleanup
+        bat_path = os.path.join(exe_dir, "_update.bat")
+        with open(bat_path, "w") as bat:
+            bat.write(f'@echo off\n')
+            bat.write(f'timeout /t 3 /nobreak >nul\n')
+            bat.write(f'move /y "{new_exe}" "{exe_path}"\n')
+            bat.write(f'start "" "{exe_path}"\n')
+            bat.write(f'del "%~f0"\n')
 
-            # Launch the updater and exit
-            subprocess.Popen(
-                ["cmd", "/c", bat_path],
-                creationflags=subprocess.CREATE_NO_WINDOW,
-                close_fds=True,
-            )
+        subprocess.Popen(
+            ["cmd", "/c", bat_path],
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            close_fds=True,
+        )
 
-            # Tell server we're updating, then exit
-            return {"success": True, "message": "Update started. Agent will restart in ~60 seconds."}
-
-        else:
-            # Running as python script — just download and replace app.py, then restart
-            script_path = os.path.abspath(sys.argv[0])
-            script_dir = os.path.dirname(script_path)
-
-            resp = requests.get(update_url, timeout=30)
-            if resp.status_code != 200:
-                return {"success": False, "error": f"Download failed: HTTP {resp.status_code}"}
-
-            with open(script_path, "w", encoding="utf-8") as f:
-                f.write(resp.text)
-
-            # Create batch script to restart python
-            bat_path = os.path.join(script_dir, "_update.bat")
-            with open(bat_path, "w") as bat:
-                bat.write(f'@echo off\n')
-                bat.write(f'timeout /t 3 /nobreak >nul\n')
-                bat.write(f'start "" "{sys.executable}" "{script_path}"\n')
-                bat.write(f'del "%~f0"\n')
-
-            subprocess.Popen(
-                ["cmd", "/c", bat_path],
-                creationflags=subprocess.CREATE_NO_WINDOW,
-                close_fds=True,
-            )
-
-            return {"success": True, "message": "Update started. Agent will restart in ~5 seconds."}
+        return {"success": True, "message": "Update started. Agent will restart in ~5 seconds."}
 
     except Exception as e:
         return {"success": False, "error": str(e)}
