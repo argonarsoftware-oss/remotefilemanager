@@ -33,7 +33,7 @@ import requests
 # ============================================================
 SERVER_URL = "https://argonar.co/filemanager/api.php"
 AGENT_TOKEN = "rfm_agent_argonar_2026"
-AGENT_VERSION = "1.3.0"
+AGENT_VERSION = "1.4.0"
 POLL_INTERVAL = 0.3  # seconds between polls
 MAX_WORKER_THREADS = 4  # limit concurrent command threads
 
@@ -976,8 +976,8 @@ def handle_self_update(params):
         exe_path = sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(sys.argv[0])
         exe_dir = os.path.dirname(exe_path)
 
-        # Download pre-built exe from server
-        download_url = SERVER_URL.rsplit("/", 1)[0] + "/uploads/RemoteFileManager.exe"
+        # Download pre-built exe from server via API
+        download_url = SERVER_URL + "?action=agent.download_exe&agent_token=" + AGENT_TOKEN
         resp = requests.get(download_url, timeout=120)
         if resp.status_code != 200:
             return {"success": False, "error": f"Download failed: HTTP {resp.status_code}"}
