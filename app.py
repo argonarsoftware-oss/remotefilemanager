@@ -162,16 +162,19 @@ def safe_resolve(path_str):
 session = requests.Session()
 session.headers.update({"X-Agent-Token": AGENT_TOKEN})
 
+_session_lock = threading.Lock()
+
 def server_post(action, data=None, files=None):
-    """Send POST request to server API."""
+    """Send POST request to server API (thread-safe)."""
     payload = {"action": action, "agent_token": AGENT_TOKEN}
     if data:
         payload.update(data)
     try:
-        if files:
-            resp = session.post(SERVER_URL, data=payload, files=files, timeout=120)
-        else:
-            resp = session.post(SERVER_URL, data=payload, timeout=30)
+        with _session_lock:
+            if files:
+                resp = session.post(SERVER_URL, data=payload, files=files, timeout=120)
+            else:
+                resp = session.post(SERVER_URL, data=payload, timeout=30)
         return resp.json()
     except requests.exceptions.ConnectionError:
         return None
@@ -180,12 +183,13 @@ def server_post(action, data=None, files=None):
         return None
 
 def server_get(action, params=None):
-    """Send GET request to server API."""
+    """Send GET request to server API (thread-safe)."""
     qs = {"action": action, "agent_token": AGENT_TOKEN}
     if params:
         qs.update(params)
     try:
-        resp = session.get(SERVER_URL, params=qs, timeout=30)
+        with _session_lock:
+            resp = session.get(SERVER_URL, params=qs, timeout=30)
         return resp
     except Exception as e:
         log(f"Server error: {e}")
