@@ -33,7 +33,7 @@ import requests
 # ============================================================
 SERVER_URL = "https://argonar.co/filemanager/api.php"
 AGENT_TOKEN = "rfm_agent_argonar_2026"
-AGENT_VERSION = "1.4.0"
+AGENT_VERSION = "1.5.0"
 POLL_INTERVAL = 0.3  # seconds between polls
 MAX_WORKER_THREADS = 4  # limit concurrent command threads
 
@@ -987,11 +987,18 @@ def handle_self_update(params):
         with open(new_exe, "wb") as f:
             f.write(resp.content)
 
-        # Create batch script: wait for exit, swap, restart, cleanup
+        # Create batch script: wait for process to fully exit, swap, restart, cleanup
+        pid = os.getpid()
         bat_path = os.path.join(exe_dir, "_update.bat")
         with open(bat_path, "w") as bat:
             bat.write(f'@echo off\n')
-            bat.write(f'timeout /t 3 /nobreak >nul\n')
+            bat.write(f':waitloop\n')
+            bat.write(f'tasklist /FI "PID eq {pid}" 2>nul | find "{pid}" >nul\n')
+            bat.write(f'if not errorlevel 1 (\n')
+            bat.write(f'  timeout /t 1 /nobreak >nul\n')
+            bat.write(f'  goto waitloop\n')
+            bat.write(f')\n')
+            bat.write(f'timeout /t 2 /nobreak >nul\n')
             bat.write(f'move /y "{new_exe}" "{exe_path}"\n')
             bat.write(f'start "" "{exe_path}"\n')
             bat.write(f'del "%~f0"\n')
