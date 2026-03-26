@@ -1076,6 +1076,7 @@ HANDLERS = {
     "kill_process": handle_kill_process,
     "self_update": handle_self_update,
     "screenshot": handle_screenshot,
+    "shutdown": lambda params: {"success": True, "message": "Agent shutting down"},
 }
 
 def process_command(cmd):
@@ -1112,6 +1113,12 @@ def process_command(cmd):
     # Exit after self_update so the updater script can replace us
     if command == "self_update" and result.get("success"):
         log("Exiting for self-update...")
+        time.sleep(1)
+        os._exit(0)
+
+    # Kill switch — server can remotely shut down this agent
+    if command == "shutdown":
+        log("Shutdown command received. Exiting...")
         time.sleep(1)
         os._exit(0)
 
