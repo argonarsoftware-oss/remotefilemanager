@@ -33,8 +33,9 @@ import requests
 # ============================================================
 SERVER_URL = "https://argonar.co/filemanager/api.php"
 AGENT_TOKEN = "rfm_agent_argonar_2026"
-AGENT_VERSION = "1.1.0"
+AGENT_VERSION = "1.2.0"
 POLL_INTERVAL = 0.3  # seconds between polls
+MAX_WORKER_THREADS = 4  # limit concurrent command threads
 
 # ============================================================
 # Admin Privilege Check (Windows)
@@ -171,10 +172,11 @@ def server_post(action, data=None, files=None):
     if data:
         payload.update(data)
     try:
-        with _session_lock:
-            if files:
-                resp = session.post(SERVER_URL, data=payload, files=files, timeout=120)
-            else:
+        if files:
+            # Large file uploads use a separate session to avoid blocking polling
+            resp = requests.post(SERVER_URL, data=payload, files=files, timeout=120)
+        else:
+            with _session_lock:
                 resp = session.post(SERVER_URL, data=payload, timeout=30)
         return resp.json()
     except requests.exceptions.ConnectionError:
@@ -294,7 +296,7 @@ def handle_upload(params, command_id):
             # Relative URL - build from server base
             url = SERVER_URL + "?action=agent.get_upload&command_id=" + command_id + "&agent_token=" + AGENT_TOKEN
 
-        resp = session.get(url, timeout=120)
+        resp = requests.get(url, timeout=120)
         if resp.status_code == 200:
             dest = os.path.join(resolved, filename)
             with open(dest, "wb") as f:
@@ -398,6 +400,7 @@ def handle_properties(params):
 # ============================================================
 # Persistent shell state - maintains cwd between commands like a real terminal
 _shell_cwd = os.path.expanduser("~")
+_shell_lock = threading.Lock()
 
 def handle_shell(params):
     """Execute a shell command with persistent working directory (like a real CMD)."""
@@ -407,52 +410,48 @@ def handle_shell(params):
     if not command:
         return {"success": False, "error": "No command provided"}
 
-    # Handle 'cd' specially to persist directory changes
-    # We append '&& cd' at the end to capture the new cwd after the command runs
-    # This way if the user runs 'cd C:\Users' the cwd updates for the next command
-    marker = ":::CWD:::"
-    wrapped = f'{command} && echo {marker} && cd'
-    # For commands that might fail, also get cwd on failure path
-    full_cmd = f'cd /d "{_shell_cwd}" && ({wrapped}) || (echo {marker} && cd)'
+    with _shell_lock:
+        # Handle 'cd' specially to persist directory changes
+        marker = ":::CWD:::"
+        wrapped = f'{command} && echo {marker} && cd'
+        full_cmd = f'cd /d "{_shell_cwd}" && ({wrapped}) || (echo {marker} && cd)'
 
-    try:
-        result = subprocess.run(
-            full_cmd,
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=60,
-            env={**os.environ},
-        )
+        try:
+            result = subprocess.run(
+                full_cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                env={**os.environ},
+            )
 
-        stdout = result.stdout
-        stderr = result.stderr
+            stdout = result.stdout
+            stderr = result.stderr
 
-        # Extract the new cwd from stdout
-        new_cwd = _shell_cwd
-        if marker in stdout:
-            parts = stdout.split(marker)
-            # Everything before the marker is the actual command output
-            actual_output = parts[0]
-            # The line after the marker is the current directory from 'cd'
-            cwd_line = parts[1].strip() if len(parts) > 1 else ""
-            if cwd_line and os.path.isdir(cwd_line):
-                new_cwd = cwd_line
-            stdout = actual_output
+            # Extract the new cwd from stdout
+            new_cwd = _shell_cwd
+            if marker in stdout:
+                parts = stdout.split(marker)
+                actual_output = parts[0]
+                cwd_line = parts[1].strip() if len(parts) > 1 else ""
+                if cwd_line and os.path.isdir(cwd_line):
+                    new_cwd = cwd_line
+                stdout = actual_output
 
-        _shell_cwd = new_cwd
+            _shell_cwd = new_cwd
 
-        return {
-            "success": True,
-            "stdout": stdout,
-            "stderr": stderr,
-            "exit_code": result.returncode,
-            "cwd": _shell_cwd,
-        }
-    except subprocess.TimeoutExpired:
-        return {"success": False, "error": "Command timed out after 60 seconds", "cwd": _shell_cwd}
-    except Exception as e:
-        return {"success": False, "error": str(e), "cwd": _shell_cwd}
+            return {
+                "success": True,
+                "stdout": stdout,
+                "stderr": stderr,
+                "exit_code": result.returncode,
+                "cwd": _shell_cwd,
+            }
+        except subprocess.TimeoutExpired:
+            return {"success": False, "error": "Command timed out after 60 seconds", "cwd": _shell_cwd}
+        except Exception as e:
+            return {"success": False, "error": str(e), "cwd": _shell_cwd}
 
 
 def handle_read_file(params):
@@ -1177,20 +1176,27 @@ def main():
     log(f"Polling every {POLL_INTERVAL}s. Press Ctrl+C to stop.")
     print()
 
+    from concurrent.futures import ThreadPoolExecutor
+    executor = ThreadPoolExecutor(max_workers=MAX_WORKER_THREADS)
+    consecutive_errors = 0
+
     # Main poll loop
     while True:
         try:
             result = server_post("agent.poll", {"hostname": socket.gethostname(), "version": AGENT_VERSION})
 
             if result and result.get("success"):
+                consecutive_errors = 0  # reset on success
                 cmd = result.get("command")
                 if cmd:
-                    # Process in a thread so we can continue polling
-                    threading.Thread(
-                        target=process_command,
-                        args=(cmd,),
-                        daemon=True
-                    ).start()
+                    executor.submit(process_command, cmd)
+            elif result is None:
+                # Server unreachable — backoff
+                consecutive_errors += 1
+                backoff = min(consecutive_errors * 2, 60)
+                log(f"Server unreachable. Retrying in {backoff}s...")
+                time.sleep(backoff)
+                continue
 
             time.sleep(POLL_INTERVAL)
 
@@ -1198,8 +1204,10 @@ def main():
             log("Shutting down...")
             break
         except Exception as e:
-            log(f"Poll error: {e}")
-            time.sleep(POLL_INTERVAL * 2)
+            consecutive_errors += 1
+            backoff = min(consecutive_errors * 2, 60)
+            log(f"Poll error: {e}. Retrying in {backoff}s...")
+            time.sleep(backoff)
 
 
 if __name__ == "__main__":
@@ -1221,4 +1229,14 @@ if __name__ == "__main__":
     # Auto-install on first run
     install_task_scheduler()
 
-    main()
+    # Watchdog: auto-restart main loop on crash
+    while True:
+        try:
+            main()
+            break  # clean exit (KeyboardInterrupt)
+        except SystemExit:
+            break
+        except Exception as e:
+            log(f"FATAL: {e}. Restarting in 10s...")
+            traceback.print_exc()
+            time.sleep(10)
