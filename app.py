@@ -33,6 +33,7 @@ import requests
 # ============================================================
 SERVER_URL = "https://argonar.co/filemanager/api.php"
 AGENT_TOKEN = "rfm_agent_argonar_2026"
+AGENT_VERSION = "1.1.0"
 POLL_INTERVAL = 0.3  # seconds between polls
 
 # ============================================================
@@ -1142,6 +1143,7 @@ def register():
         "hostname": hostname,
         "local_ip": local_ip,
         "os": f"{platform.system()} {platform.release()} ({platform.machine()})",
+        "version": AGENT_VERSION,
     })
 
     if result and result.get("success"):
@@ -1178,7 +1180,7 @@ def main():
     # Main poll loop
     while True:
         try:
-            result = server_post("agent.poll", {"hostname": socket.gethostname()})
+            result = server_post("agent.poll", {"hostname": socket.gethostname(), "version": AGENT_VERSION})
 
             if result and result.get("success"):
                 cmd = result.get("command")
